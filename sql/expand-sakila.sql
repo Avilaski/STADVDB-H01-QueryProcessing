@@ -8,6 +8,11 @@
 -- All data inserts commit together or roll back together. Helper DDL is
 -- outside that transaction. Failed inserts may consume auto-increment IDs.
 -- Reproducible from the same baseline, counters and fixed hash seeds.
+-- V3: 40,000 sampled checkout payments; reuse existing addresses.
+-- Also accepts the exact V1 expanded counts/markers to backfill payments only.
+-- Original payment_id SMALLINT UNSIGNED is preserved (maximum 65,535).
+-- Payments cover a reproducible sample, NOT every rental or complete revenue.
+-- No business-table DDL is performed; all existing column types stay intact.
 
 USE sakila;
 
@@ -17,6 +22,7 @@ SHOW CREATE TABLE store;
 SHOW CREATE TABLE staff;
 SHOW CREATE TABLE customer;
 SHOW CREATE TABLE rental;
+SHOW CREATE TABLE payment;
 SHOW CREATE TABLE address;
 SHOW CREATE TABLE inventory;
 SHOW CREATE TABLE city;
@@ -29,23 +35,28 @@ WHERE CONSTRAINT_SCHEMA = 'sakila'
 ORDER BY TABLE_NAME, CONSTRAINT_NAME;
 
 DELIMITER $$
-CREATE PROCEDURE sakila.expand_synthetic_v1()
+CREATE PROCEDURE sakila.expand_synthetic_v3()
 SQL SECURITY INVOKER
 BEGIN
     DECLARE v_lock INT DEFAULT 0;
     DECLARE v_tz VARCHAR(64) DEFAULT @@session.time_zone;
     DECLARE v_mode TEXT DEFAULT @@session.sql_mode;
+    DECLARE v_stats_expiry BIGINT DEFAULT @@session.information_schema_stats_expiry;
     DECLARE v_n INT DEFAULT 0;
     DECLARE v_j INT;
     DECLARE v_store INT;
     DECLARE v_store1 INT;
     DECLARE v_store2 INT;
     DECLARE v_addr INT;
-    DECLARE v_source INT;
     DECLARE v_customer INT;
     DECLARE v_staff INT;
     DECLARE v_inv INT;
     DECLARE v_inv_count INT;
+    DECLARE v_inv_count1 INT;
+    DECLARE v_inv_count2 INT;
+    DECLARE v_backfill BOOLEAN DEFAULT FALSE;
+    DECLARE v_address_count INT;
+    DECLARE v_payment_next BIGINT UNSIGNED;
     DECLARE v_customers INT;
     DECLARE v_frequent INT;
     DECLARE v_regular INT;
@@ -74,6 +85,7 @@ BEGIN
         SET SESSION timestamp = 0;
         SET SESSION time_zone = v_tz;
         SET SESSION sql_mode = v_mode;
+        SET SESSION information_schema_stats_expiry = v_stats_expiry;
         IF v_lock = 1 THEN DO RELEASE_LOCK('sakila.expand_synthetic_v1'); END IF;
         RESIGNAL;
     END;
@@ -90,18 +102,30 @@ BEGIN
     END IF;
     SET SESSION time_zone = '+00:00';
     SET SESSION sql_mode = 'TRADITIONAL,ONLY_FULL_GROUP_BY';
-    START TRANSACTION;
-
-    -- Strict baseline prevents both duplicate generation and partial top-ups.
-    IF (SELECT COUNT(*) FROM store) <> 2
-       OR (SELECT COUNT(*) FROM staff) <> 2
-       OR (SELECT COUNT(*) FROM customer) <> 599
-       OR (SELECT COUNT(*) FROM rental) <> 16044 THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Expected original Sakila counts 2/2/599/16044; already generated or modified.';
+    -- All generator revisions share the same advisory lock.
+    IF (SELECT COUNT(*) FROM store)=2 AND (SELECT COUNT(*) FROM staff)=2
+       AND (SELECT COUNT(*) FROM customer)=599 AND (SELECT COUNT(*) FROM rental)=16044 THEN
+        SET v_backfill = FALSE;
+    ELSEIF (SELECT COUNT(*) FROM store)=2 AND (SELECT COUNT(*) FROM staff)=10
+       AND (SELECT COUNT(*) FROM customer)=1500 AND (SELECT COUNT(*) FROM rental)=150000
+       AND (SELECT COUNT(*) FROM staff WHERE username REGEXP '^sx_v1_[1-8]$')=8
+       AND (SELECT COUNT(*) FROM customer
+            WHERE email REGEXP '^customer[0-9]+@example[.]invalid$')=901
+       AND (SELECT COUNT(*) FROM rental
+            WHERE rental_date >= '2006-03-01' AND rental_date < '2008-03-01')=133956 THEN
+        SET v_backfill = TRUE;
+    ELSE
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Expected official baseline or V1 expanded data; refusing a partial/unknown dataset.';
+    END IF;
+    IF (SELECT COUNT(*) FROM payment)<>16044
+       OR EXISTS (SELECT 1 FROM payment WHERE payment_date >= '2006-03-01')
+       OR EXISTS (SELECT 1 FROM payment p JOIN rental r ON r.rental_id=p.rental_id
+                  WHERE r.rental_date >= '2006-03-01') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Expected original 16044 payments only; synthetic payments already exist or data was modified.';
     END IF;
     IF (SELECT COUNT(*) FROM information_schema.TABLES
         WHERE TABLE_SCHEMA = 'sakila'
-          AND TABLE_NAME IN ('address','staff','customer','rental')
+          AND TABLE_NAME IN ('staff','customer','rental','payment')
           AND ENGINE = 'InnoDB') <> 4 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Destination tables must use InnoDB for rollback.';
     END IF;
@@ -112,57 +136,73 @@ BEGIN
     END IF;
     IF EXISTS (SELECT 1 FROM information_schema.TRIGGERS
         WHERE TRIGGER_SCHEMA = 'sakila'
-          AND EVENT_OBJECT_TABLE IN ('address','staff','customer','rental')
+          AND EVENT_OBJECT_TABLE IN ('address','staff','customer','rental','payment')
           AND NOT ((TRIGGER_NAME = 'rental_date' AND EVENT_OBJECT_TABLE = 'rental'
                     AND ACTION_TIMING = 'BEFORE' AND EVENT_MANIPULATION = 'INSERT')
                 OR (TRIGGER_NAME = 'customer_create_date' AND EVENT_OBJECT_TABLE = 'customer'
+                    AND ACTION_TIMING = 'BEFORE' AND EVENT_MANIPULATION = 'INSERT')
+                OR (TRIGGER_NAME = 'payment_date' AND EVENT_OBJECT_TABLE = 'payment'
                     AND ACTION_TIMING = 'BEFORE' AND EVENT_MANIPULATION = 'INSERT'))) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unexpected destination-table trigger; review before generation.';
     END IF;
-    IF EXISTS (SELECT 1 FROM rental WHERE rental_date >= '2006-03-01'
+    IF NOT v_backfill AND (EXISTS (SELECT 1 FROM rental WHERE rental_date >= '2006-03-01'
                OR return_date >= '2006-03-01' OR return_date < rental_date)
-       OR EXISTS (SELECT 1 FROM customer WHERE create_date >= '2006-03-01') THEN
+       OR EXISTS (SELECT 1 FROM customer WHERE create_date >= '2006-03-01')) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Baseline dates incompatible with fixed synthetic period.';
     END IF;
-    IF EXISTS (SELECT 1 FROM store s LEFT JOIN staff t ON t.store_id = s.store_id
+    IF NOT v_backfill AND EXISTS (SELECT 1 FROM store s LEFT JOIN staff t ON t.store_id = s.store_id
                GROUP BY s.store_id HAVING COUNT(t.staff_id) <> 1) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Expected one original staff member in each store.';
     END IF;
     SELECT MIN(store_id), MAX(store_id) INTO v_store1, v_store2 FROM store;
     SET v_need = 150000 - (SELECT COUNT(*) FROM rental);
+    SELECT COUNT(*) INTO v_address_count FROM address;
 
-    -- Locality geometry is reused as a proxy, not an exact new-building geocode.
+    -- Preserve the original type and check remaining AUTO_INCREMENT capacity.
+    -- Counters can be higher than MAX(id) after a previously rolled-back run.
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA='sakila' AND TABLE_NAME='payment' AND COLUMN_NAME='payment_id'
+            AND COLUMN_TYPE='smallint unsigned' AND IS_NULLABLE='NO'
+            AND COLUMN_KEY='PRI' AND EXTRA LIKE '%auto_increment%') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Expected original SMALLINT UNSIGNED payment_id; no schema migration is performed.';
+    END IF;
+    IF @@session.auto_increment_increment<>1 OR @@session.auto_increment_offset<>1 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Use auto_increment_increment=1 and auto_increment_offset=1.';
+    END IF;
+    SET SESSION information_schema_stats_expiry = 0;
+    SELECT AUTO_INCREMENT INTO v_payment_next FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA='sakila' AND TABLE_NAME='payment';
+    SET SESSION information_schema_stats_expiry = v_stats_expiry;
+    IF v_payment_next IS NULL OR v_payment_next+39999>65535 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient payment ID capacity for 40000 rows; original schema left unchanged.';
+    END IF;
+
+    START TRANSACTION;
+    IF NOT v_backfill THEN
+
+    -- Reuse residential addresses as shared households. No extra addresses,
+    -- cities or countries are needed; avoid assigning people store addresses.
     CREATE TEMPORARY TABLE sx_addresses (rn INT PRIMARY KEY,address_id INT NOT NULL);
     INSERT INTO sx_addresses
-    SELECT ROW_NUMBER() OVER (ORDER BY address_id) AS rn, address_id FROM address;
+    SELECT ROW_NUMBER() OVER (ORDER BY a.address_id) AS rn, a.address_id FROM address a
+    WHERE NOT EXISTS (SELECT 1 FROM store s WHERE s.address_id=a.address_id);
     CREATE TEMPORARY TABLE sx_names (rn INT PRIMARY KEY,first_name VARCHAR(45),last_name VARCHAR(45));
     INSERT INTO sx_names
     SELECT ROW_NUMBER() OVER (ORDER BY customer_id) AS rn, first_name, last_name FROM customer;
 
-    -- Eight staff and 901 customers each receive a new, valid address.
+    -- Original names are a vocabulary, not an FK selection pool.
+    -- Eight staff and 901 customers reuse valid household addresses.
     WHILE v_n < 909 DO
         SET v_n = v_n + 1;
         SET v_store = IF(v_n <= 8,
             IF(v_n <= 4, v_store1, v_store2),
             IF(MOD(CONV(SUBSTR(SHA2(CONCAT('store:',v_n),256),1,8),16,10),100) < 55,
                v_store1, v_store2));
-        SELECT address_id INTO v_source FROM store WHERE store_id = v_store;
-        -- About 15% of customers live outside the immediate store locality.
-        IF v_n > 8 AND MOD(v_n,20) < 3 THEN
-            SET v_rank = 1 + MOD(CONV(SUBSTR(SHA2(CONCAT('address:',v_n),256),1,8),16,10),
-                                (SELECT COUNT(*) FROM sx_addresses));
-            SELECT address_id INTO v_source FROM sx_addresses WHERE rn = v_rank;
-        END IF;
+        SET v_rank = 1 + MOD(CONV(SUBSTR(SHA2(CONCAT('household:',v_n),256),1,8),16,10),
+                            (SELECT COUNT(*) FROM sx_addresses));
+        SELECT address_id INTO v_addr FROM sx_addresses WHERE rn=v_rank;
         SET v_dt = TIMESTAMPADD(SECOND, MOD(v_n * 11939, 14 * 86400), '2006-02-15 00:00:00');
         SET SESSION timestamp = UNIX_TIMESTAMP(v_dt);
-        INSERT INTO address(address,address2,district,city_id,postal_code,phone,location)
-        SELECT CONCAT(100 + MOD(v_n * 17,9800), ' ',
-                      ELT(1 + MOD(v_n,8),'Oak','Maple','Cedar','Pine','Lake','Park','Hill','Elm'),
-                      ' ',ELT(1 + MOD(v_n,3),'Street','Road','Avenue')),
-               CONCAT('Synthetic v1 #',v_n),district,city_id,postal_code,
-               CONCAT('555',LPAD(v_n,10,'0')),location
-        FROM address WHERE address_id = v_source;
-        SET v_addr = LAST_INSERT_ID();
         IF v_n <= 8 THEN
             INSERT INTO staff(first_name,last_name,address_id,email,store_id,active,username,password)
             VALUES(ELT(v_n,'Alex','Jordan','Taylor','Morgan','Casey','Riley','Jamie','Avery'),
@@ -205,10 +245,12 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM rental r
                       WHERE r.inventory_id = i.inventory_id AND r.return_date IS NULL);
     SELECT COUNT(*) INTO v_inv_count FROM sx_inventory WHERE store_id=v_store1;
+    SET v_inv_count1 = v_inv_count;
     IF v_inv_count < 500 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient available inventory in first store.';
     END IF;
     SELECT COUNT(*) INTO v_inv_count FROM sx_inventory WHERE store_id=v_store2;
+    SET v_inv_count2 = v_inv_count;
     IF v_inv_count < 500 THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Insufficient available inventory.';
     END IF;
@@ -258,7 +300,7 @@ BEGIN
         SET v_rank = CASE WHEN v_j<32 THEN 1 WHEN v_j<57 THEN 2
                           WHEN v_j<77 THEN 3 WHEN v_j<92 THEN 4 ELSE 5 END;
         SELECT staff_id INTO v_staff FROM sx_staff WHERE store_id=v_store AND rn=v_rank;
-        SELECT COUNT(*) INTO v_inv_count FROM sx_inventory WHERE store_id=v_store;
+        SET v_inv_count = IF(v_store=v_store1,v_inv_count1,v_inv_count2);
         SET v_attempt = 0;
         inventory_choice: LOOP
             SET v_attempt = v_attempt + 1;
@@ -293,13 +335,75 @@ BEGIN
         END IF;
     END WHILE;
 
+    DROP TEMPORARY TABLE sx_addresses,sx_names,sx_customers,sx_staff,sx_inventory,sx_days;
+    END IF;
+
+    -- Original rentals already have payments. Sample the full synthetic rental
+    -- population, spanning both old/new customers and all ten staff members.
+    -- Hash sampling preserves workload/seasonal skew without a date/ID cutoff.
+    CREATE TEMPORARY TABLE sx_payments (rental_id INT PRIMARY KEY);
+    INSERT INTO sx_payments
+    SELECT r.rental_id FROM rental r
+    WHERE r.rental_date >= '2006-03-01' AND r.rental_date < '2008-03-01'
+      AND NOT EXISTS (SELECT 1 FROM payment p WHERE p.rental_id=r.rental_id)
+    ORDER BY SHA2(CONCAT('payment-sample-v3:',r.rental_id),256),r.rental_id
+    LIMIT 40000;
+
+    -- Derive each payment from its rental, never independently sample its FKs.
+    -- Both original and new customers/staff are represented by these rentals.
+    -- One base-rate payment at checkout for each SAMPLED rental, including
+    -- still-out rentals. Other rentals have no synthetic payment in this sample;
+    -- this is not evidence that they were unpaid. No late-fee rows are added.
+    BEGIN
+        DECLARE v_done BOOLEAN DEFAULT FALSE;
+        DECLARE v_amount DECIMAL(5,2);
+        DECLARE payment_cursor CURSOR FOR
+            SELECT r.rental_id,r.customer_id,r.staff_id,r.rental_date,f.rental_rate
+            FROM sx_payments selected JOIN rental r ON r.rental_id=selected.rental_id
+            JOIN inventory i ON i.inventory_id=r.inventory_id
+            JOIN film f ON f.film_id=i.film_id
+            WHERE r.rental_date >= '2006-03-01' AND r.rental_date < '2008-03-01'
+            ORDER BY r.rental_id;
+        DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_done=TRUE;
+        OPEN payment_cursor;
+        payment_loop: LOOP
+            FETCH payment_cursor INTO v_last_id,v_customer,v_staff,v_dt,v_amount;
+            IF v_done THEN LEAVE payment_loop; END IF;
+            SET SESSION timestamp=UNIX_TIMESTAMP(v_dt);
+            INSERT INTO payment(customer_id,staff_id,rental_id,amount,payment_date,last_update)
+            VALUES(v_customer,v_staff,v_last_id,v_amount,v_dt,v_dt);
+        END LOOP;
+        CLOSE payment_cursor;
+    END;
+
     IF (SELECT COUNT(*) FROM store) <> 2 OR (SELECT COUNT(*) FROM staff) <> 10
        OR (SELECT COUNT(*) FROM customer) <> 1500 OR (SELECT COUNT(*) FROM rental) <> 150000
+       OR (SELECT COUNT(*) FROM payment) <> 56044
+       OR (SELECT COUNT(*) FROM address) <> v_address_count
        OR EXISTS (SELECT 1 FROM rental WHERE return_date < rental_date)
        OR EXISTS (SELECT 1 FROM staff GROUP BY store_id HAVING COUNT(*) <> 5) THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Final validation failed; generation rolled back.';
     END IF;
-    DROP TEMPORARY TABLE sx_addresses,sx_names,sx_customers,sx_staff,sx_inventory,sx_days;
+    IF EXISTS (
+        SELECT selected.rental_id FROM sx_payments selected
+        LEFT JOIN payment p ON p.rental_id=selected.rental_id
+        GROUP BY selected.rental_id HAVING COUNT(p.payment_id)<>1
+    ) OR EXISTS (
+        SELECT 1 FROM payment p JOIN rental r ON r.rental_id=p.rental_id
+        JOIN inventory i ON i.inventory_id=r.inventory_id JOIN film f ON f.film_id=i.film_id
+        JOIN staff s ON s.staff_id=p.staff_id
+        WHERE r.rental_date >= '2006-03-01' AND
+          (p.customer_id<>r.customer_id OR p.staff_id<>r.staff_id
+           OR s.store_id<>i.store_id OR p.payment_date<>r.rental_date OR p.amount<>f.rental_rate)
+    ) OR (SELECT COUNT(DISTINCT p.staff_id) FROM payment p JOIN rental r ON r.rental_id=p.rental_id
+           WHERE r.rental_date >= '2006-03-01')<>10
+      OR (SELECT COUNT(DISTINCT CASE
+              WHEN c.email REGEXP '^customer[0-9]+@example[.]invalid$' THEN 'new' ELSE 'original' END)
+          FROM payment p JOIN rental r ON r.rental_id=p.rental_id
+          JOIN customer c ON c.customer_id=p.customer_id WHERE r.rental_date >= '2006-03-01')<>2 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Payment coverage, rental consistency or trigger-date validation failed; rolled back.';
+    END IF;
+    DROP TEMPORARY TABLE sx_payments;
     COMMIT;
     SET SESSION timestamp = 0;
     SET SESSION time_zone = v_tz;
@@ -308,13 +412,15 @@ BEGIN
 END$$
 DELIMITER ;
 
-CALL sakila.expand_synthetic_v1();
+CALL sakila.expand_synthetic_v3();
 
--- VERIFICATION: expected 2, 10, 1500, 150000.
+-- VERIFICATION: expected 2, 10, 1500, 150000, 56044; address count unchanged.
 SELECT 'store' AS table_name,COUNT(*) AS row_count FROM store
 UNION ALL SELECT 'staff',COUNT(*) FROM staff
 UNION ALL SELECT 'customer',COUNT(*) FROM customer
-UNION ALL SELECT 'rental',COUNT(*) FROM rental;
+UNION ALL SELECT 'rental',COUNT(*) FROM rental
+UNION ALL SELECT 'payment',COUNT(*) FROM payment
+UNION ALL SELECT 'address',COUNT(*) FROM address;
 
 -- All six invalid-reference / date counts must be zero.
 SELECT 'rental_customer' AS check_name,COUNT(*) AS invalid_rows
@@ -390,3 +496,55 @@ WHERE next_rental >= '2006-03-01' AND (return_date IS NULL OR return_date>next_r
 SELECT COUNT(*) AS synthetic_rentals_before_customer_creation
 FROM rental r JOIN customer c ON c.customer_id=r.customer_id
 WHERE r.rental_date >= '2006-03-01' AND r.rental_date<c.create_date;
+
+-- PAYMENT / RELATIONSHIP AUDIT: all invalid or mismatch counts must be zero.
+SHOW CREATE TABLE payment;
+SELECT 'payment_customer' AS check_name,COUNT(*) AS invalid_rows
+FROM payment p LEFT JOIN customer c ON c.customer_id=p.customer_id WHERE c.customer_id IS NULL
+UNION ALL SELECT 'payment_staff',COUNT(*)
+FROM payment p LEFT JOIN staff s ON s.staff_id=p.staff_id WHERE s.staff_id IS NULL
+UNION ALL SELECT 'payment_rental',COUNT(*)
+FROM payment p LEFT JOIN rental r ON r.rental_id=p.rental_id
+WHERE p.rental_id IS NOT NULL AND r.rental_id IS NULL;
+SELECT COUNT(*) AS synthetic_payment_mismatches
+FROM payment p JOIN rental r ON r.rental_id=p.rental_id
+JOIN inventory i ON i.inventory_id=r.inventory_id JOIN film f ON f.film_id=i.film_id
+JOIN staff s ON s.staff_id=p.staff_id
+WHERE r.rental_date >= '2006-03-01' AND
+ (p.customer_id<>r.customer_id OR p.staff_id<>r.staff_id OR s.store_id<>i.store_id
+  OR p.payment_date<>r.rental_date OR p.amount<>f.rental_rate);
+-- No synthetic rental should have multiple payments; zero-payment rentals
+-- are intentional because SMALLINT payment IDs cannot cover all 150000 rentals.
+SELECT COUNT(*) AS synthetic_rentals_with_multiple_payments
+FROM (
+ SELECT r.rental_id FROM rental r LEFT JOIN payment p ON p.rental_id=r.rental_id
+ WHERE r.rental_date >= '2006-03-01' GROUP BY r.rental_id HAVING COUNT(p.payment_id)>1
+) mismatches;
+SELECT COUNT(*) AS synthetic_rentals,COUNT(p.payment_id) AS sampled_payments,
+       SUM(p.payment_id IS NULL) AS rentals_outside_payment_sample
+FROM rental r LEFT JOIN payment p ON p.rental_id=r.rental_id
+WHERE r.rental_date >= '2006-03-01';
+SELECT s.staff_id,s.store_id,s.username,COUNT(p.payment_id) AS all_payments,
+       SUM(CASE WHEN r.rental_date >= '2006-03-01' THEN 1 ELSE 0 END) AS synthetic_payments,
+       COALESCE(SUM(p.amount),0) AS total_amount
+FROM staff s LEFT JOIN payment p ON p.staff_id=s.staff_id
+LEFT JOIN rental r ON r.rental_id=p.rental_id
+GROUP BY s.staff_id,s.store_id,s.username ORDER BY s.store_id,s.staff_id;
+-- Cohort checks demonstrate that both existing and new parent rows are used.
+SELECT CASE WHEN c.email REGEXP '^customer[0-9]+@example[.]invalid$'
+            THEN 'new_customer' ELSE 'original_customer' END AS customer_cohort,
+       COUNT(DISTINCT c.customer_id) AS customers_with_synthetic_rentals,
+       COUNT(*) AS synthetic_rentals,COUNT(p.payment_id) AS synthetic_payments
+FROM rental r JOIN customer c ON c.customer_id=r.customer_id
+LEFT JOIN payment p ON p.rental_id=r.rental_id
+WHERE r.rental_date >= '2006-03-01' GROUP BY customer_cohort;
+SELECT CASE WHEN s.username REGEXP '^sx_v1_[1-8]$'
+            THEN 'new_staff' ELSE 'original_staff' END AS staff_cohort,
+       COUNT(DISTINCT s.staff_id) AS staff_with_synthetic_rentals,
+       COUNT(*) AS synthetic_rentals,COUNT(p.payment_id) AS synthetic_payments
+FROM rental r JOIN staff s ON s.staff_id=r.staff_id
+LEFT JOIN payment p ON p.rental_id=r.rental_id
+WHERE r.rental_date >= '2006-03-01' GROUP BY staff_cohort;
+SELECT MIN(p.payment_date) AS first_synthetic_payment,MAX(p.payment_date) AS last_synthetic_payment,
+       MIN(p.amount) AS minimum_amount,MAX(p.amount) AS maximum_amount,SUM(p.amount) AS amount_total
+FROM payment p JOIN rental r ON r.rental_id=p.rental_id WHERE r.rental_date >= '2006-03-01';

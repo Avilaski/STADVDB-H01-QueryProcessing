@@ -1,0 +1,66 @@
+mysql_version
+8.0.46
+Table	Create Table
+store	CREATE TABLE `store` (\n  `store_id` tinyint unsigned NOT NULL AUTO_INCREMENT,\n  `manager_staff_id` tinyint unsigned NOT NULL,\n  `address_id` smallint unsigned NOT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`store_id`),\n  UNIQUE KEY `idx_unique_manager` (`manager_staff_id`),\n  KEY `idx_fk_address_id` (`address_id`),\n  CONSTRAINT `fk_store_address` FOREIGN KEY (`address_id`) REFERENCES `address` (`address_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_store_staff` FOREIGN KEY (`manager_staff_id`) REFERENCES `staff` (`staff_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+staff	CREATE TABLE `staff` (\n  `staff_id` tinyint unsigned NOT NULL AUTO_INCREMENT,\n  `first_name` varchar(45) NOT NULL,\n  `last_name` varchar(45) NOT NULL,\n  `address_id` smallint unsigned NOT NULL,\n  `picture` blob,\n  `email` varchar(50) DEFAULT NULL,\n  `store_id` tinyint unsigned NOT NULL,\n  `active` tinyint(1) NOT NULL DEFAULT '1',\n  `username` varchar(16) NOT NULL,\n  `password` varchar(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`staff_id`),\n  KEY `idx_fk_store_id` (`store_id`),\n  KEY `idx_fk_address_id` (`address_id`),\n  CONSTRAINT `fk_staff_address` FOREIGN KEY (`address_id`) REFERENCES `address` (`address_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_staff_store` FOREIGN KEY (`store_id`) REFERENCES `store` (`store_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+customer	CREATE TABLE `customer` (\n  `customer_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `store_id` tinyint unsigned NOT NULL,\n  `first_name` varchar(45) NOT NULL,\n  `last_name` varchar(45) NOT NULL,\n  `email` varchar(50) DEFAULT NULL,\n  `address_id` smallint unsigned NOT NULL,\n  `active` tinyint(1) NOT NULL DEFAULT '1',\n  `create_date` datetime NOT NULL,\n  `last_update` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`customer_id`),\n  KEY `idx_fk_store_id` (`store_id`),\n  KEY `idx_fk_address_id` (`address_id`),\n  KEY `idx_last_name` (`last_name`),\n  CONSTRAINT `fk_customer_address` FOREIGN KEY (`address_id`) REFERENCES `address` (`address_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_customer_store` FOREIGN KEY (`store_id`) REFERENCES `store` (`store_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=600 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+rental	CREATE TABLE `rental` (\n  `rental_id` int NOT NULL AUTO_INCREMENT,\n  `rental_date` datetime NOT NULL,\n  `inventory_id` mediumint unsigned NOT NULL,\n  `customer_id` smallint unsigned NOT NULL,\n  `return_date` datetime DEFAULT NULL,\n  `staff_id` tinyint unsigned NOT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`rental_id`),\n  UNIQUE KEY `rental_date` (`rental_date`,`inventory_id`,`customer_id`),\n  KEY `idx_fk_inventory_id` (`inventory_id`),\n  KEY `idx_fk_customer_id` (`customer_id`),\n  KEY `idx_fk_staff_id` (`staff_id`),\n  CONSTRAINT `fk_rental_customer` FOREIGN KEY (`customer_id`) REFERENCES `customer` (`customer_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_rental_inventory` FOREIGN KEY (`inventory_id`) REFERENCES `inventory` (`inventory_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_rental_staff` FOREIGN KEY (`staff_id`) REFERENCES `staff` (`staff_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=16050 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+payment	CREATE TABLE `payment` (\n  `payment_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `customer_id` smallint unsigned NOT NULL,\n  `staff_id` tinyint unsigned NOT NULL,\n  `rental_id` int DEFAULT NULL,\n  `amount` decimal(5,2) NOT NULL,\n  `payment_date` datetime NOT NULL,\n  `last_update` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`payment_id`),\n  KEY `idx_fk_staff_id` (`staff_id`),\n  KEY `idx_fk_customer_id` (`customer_id`),\n  KEY `fk_payment_rental` (`rental_id`),\n  CONSTRAINT `fk_payment_customer` FOREIGN KEY (`customer_id`) REFERENCES `customer` (`customer_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_payment_rental` FOREIGN KEY (`rental_id`) REFERENCES `rental` (`rental_id`) ON DELETE SET NULL ON UPDATE CASCADE,\n  CONSTRAINT `fk_payment_staff` FOREIGN KEY (`staff_id`) REFERENCES `staff` (`staff_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=16050 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+address	CREATE TABLE `address` (\n  `address_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `address` varchar(50) NOT NULL,\n  `address2` varchar(50) DEFAULT NULL,\n  `district` varchar(20) NOT NULL,\n  `city_id` smallint unsigned NOT NULL,\n  `postal_code` varchar(10) DEFAULT NULL,\n  `phone` varchar(20) NOT NULL,\n  `location` geometry NOT NULL /*!80003 SRID 0 */,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`address_id`),\n  KEY `idx_fk_city_id` (`city_id`),\n  SPATIAL KEY `idx_location` (`location`),\n  CONSTRAINT `fk_address_city` FOREIGN KEY (`city_id`) REFERENCES `city` (`city_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=606 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+inventory	CREATE TABLE `inventory` (\n  `inventory_id` mediumint unsigned NOT NULL AUTO_INCREMENT,\n  `film_id` smallint unsigned NOT NULL,\n  `store_id` tinyint unsigned NOT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`inventory_id`),\n  KEY `idx_fk_film_id` (`film_id`),\n  KEY `idx_store_id_film_id` (`store_id`,`film_id`),\n  CONSTRAINT `fk_inventory_film` FOREIGN KEY (`film_id`) REFERENCES `film` (`film_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_inventory_store` FOREIGN KEY (`store_id`) REFERENCES `store` (`store_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=4582 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+city	CREATE TABLE `city` (\n  `city_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `city` varchar(50) NOT NULL,\n  `country_id` smallint unsigned NOT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`city_id`),\n  KEY `idx_fk_country_id` (`country_id`),\n  CONSTRAINT `fk_city_country` FOREIGN KEY (`country_id`) REFERENCES `country` (`country_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=601 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+country	CREATE TABLE `country` (\n  `country_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `country` varchar(50) NOT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`country_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=110 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Table	Create Table
+film	CREATE TABLE `film` (\n  `film_id` smallint unsigned NOT NULL AUTO_INCREMENT,\n  `title` varchar(128) NOT NULL,\n  `description` text,\n  `release_year` year DEFAULT NULL,\n  `language_id` tinyint unsigned NOT NULL,\n  `original_language_id` tinyint unsigned DEFAULT NULL,\n  `rental_duration` tinyint unsigned NOT NULL DEFAULT '3',\n  `rental_rate` decimal(4,2) NOT NULL DEFAULT '4.99',\n  `length` smallint unsigned DEFAULT NULL,\n  `replacement_cost` decimal(5,2) NOT NULL DEFAULT '19.99',\n  `rating` enum('G','PG','PG-13','R','NC-17') DEFAULT 'G',\n  `special_features` set('Trailers','Commentaries','Deleted Scenes','Behind the Scenes') DEFAULT NULL,\n  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`film_id`),\n  KEY `idx_title` (`title`),\n  KEY `idx_fk_language_id` (`language_id`),\n  KEY `idx_fk_original_language_id` (`original_language_id`),\n  CONSTRAINT `fk_film_language` FOREIGN KEY (`language_id`) REFERENCES `language` (`language_id`) ON DELETE RESTRICT ON UPDATE CASCADE,\n  CONSTRAINT `fk_film_language_original` FOREIGN KEY (`original_language_id`) REFERENCES `language` (`language_id`) ON DELETE RESTRICT ON UPDATE CASCADE\n) ENGINE=InnoDB AUTO_INCREMENT=1001 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+Trigger	Event	Table	Statement	Timing	Created	sql_mode	Definer	character_set_client	collation_connection	Database Collation
+customer_create_date	INSERT	customer	SET NEW.create_date = NOW()	BEFORE	2026-09-20 14:53:49.08	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+ins_film	INSERT	film	BEGIN\n    INSERT INTO film_text (film_id, title, description)\n        VALUES (new.film_id, new.title, new.description);\n  END	AFTER	2026-09-20 14:53:48.45	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+upd_film	UPDATE	film	BEGIN\n    IF (old.title != new.title) OR (old.description != new.description) OR (old.film_id != new.film_id)\n    THEN\n        UPDATE film_text\n            SET title=new.title,\n                description=new.description,\n                film_id=new.film_id\n        WHERE film_id=old.film_id;\n    END IF;\n  END	AFTER	2026-09-20 14:53:48.47	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+del_film	DELETE	film	BEGIN\n    DELETE FROM film_text WHERE film_id = old.film_id;\n  END	AFTER	2026-09-20 14:53:48.47	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+payment_date	INSERT	payment	SET NEW.payment_date = NOW()	BEFORE	2026-09-20 14:53:50.53	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+rental_date	INSERT	rental	SET NEW.rental_date = NOW()	BEFORE	2026-09-20 14:53:51.66	STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION	root@localhost	utf8mb4	utf8mb4_0900_ai_ci	utf8mb4_0900_ai_ci
+TABLE_NAME	CONSTRAINT_NAME	CONSTRAINT_TYPE
+actor	PRIMARY	PRIMARY KEY
+address	fk_address_city	FOREIGN KEY
+address	PRIMARY	PRIMARY KEY
+category	PRIMARY	PRIMARY KEY
+city	fk_city_country	FOREIGN KEY
+city	PRIMARY	PRIMARY KEY
+country	PRIMARY	PRIMARY KEY
+customer	fk_customer_address	FOREIGN KEY
+customer	fk_customer_store	FOREIGN KEY
+customer	PRIMARY	PRIMARY KEY
+film	fk_film_language	FOREIGN KEY
+film	fk_film_language_original	FOREIGN KEY
+film	PRIMARY	PRIMARY KEY
+film_actor	fk_film_actor_actor	FOREIGN KEY
+film_actor	fk_film_actor_film	FOREIGN KEY
+film_actor	PRIMARY	PRIMARY KEY
+film_category	fk_film_category_category	FOREIGN KEY
+film_category	fk_film_category_film	FOREIGN KEY
+film_category	PRIMARY	PRIMARY KEY
+film_text	PRIMARY	PRIMARY KEY
+inventory	fk_inventory_film	FOREIGN KEY
+inventory	fk_inventory_store	FOREIGN KEY
+inventory	PRIMARY	PRIMARY KEY
+language	PRIMARY	PRIMARY KEY
+payment	fk_payment_customer	FOREIGN KEY
+payment	fk_payment_rental	FOREIGN KEY
+payment	fk_payment_staff	FOREIGN KEY
+payment	PRIMARY	PRIMARY KEY
+rental	fk_rental_customer	FOREIGN KEY
+rental	fk_rental_inventory	FOREIGN KEY
+rental	fk_rental_staff	FOREIGN KEY
+rental	PRIMARY	PRIMARY KEY
+rental	rental_date	UNIQUE
+staff	fk_staff_address	FOREIGN KEY
+staff	fk_staff_store	FOREIGN KEY
+staff	PRIMARY	PRI
