@@ -1,0 +1,166 @@
+Prompt 1:
+I am using MySQL 8.0+ with the official Sakila database for a query-optimization activity.&#x20;
+
+
+
+Create a reproducible SQL script that expands the existing Sakila data without deleting or replacing original data
+
+
+
+After generation, there should be
+
+- store: 2 stores, keep the existing stores
+- staff: 10 total, approximately 5 per store
+- customer: 1,500 total
+- rental: 150,000 total
+
+
+
+The 150,000 rentals should be spread out over a realistic date range.
+
+
+
+First inspect the existing Sakila schema before generating anything and preserve all PK, FK, UNIQUE, NOT NULL, and other constraints.
+
+
+
+Generate synthetic records primarily for staff, customer, and rental. You can add records to supporting tables like address when necessary for referential integrity. Reuse existing store,  city, country, inventory, and film records where appropriate.
+
+
+
+For generated data:
+
+
+
+- Keep exactly 2 stores.
+- Increase staff to 10, approximately 5 assigned to each store.
+- Give new staff valid addresses.
+- Increase customers to approximately 1,500 with valid store and address references.
+- Increase rentals to approximately 150,000.
+- Every rental must reference a valid customer, staff member, and inventory item.
+- return\_date must never be earlier than rental\_date.
+- Respect Sakila's UNIQUE constraint on rentals.
+- Use plausible, non-uniform distributions rather than perfectly uniform random data.
+- Some customers should rent more frequently than others.
+- Staff workloads should vary rather than every staff member having exactly the same rental count.
+- Rental activity should vary over time.
+- The generated dataset should reflect realistic real-world data volumes and relationships between tables. In addition, attribute values and event frequencies should follow plausible distributions. Where appropriate, realistic data skew should be incorporated rather than assuming uniform distributions.
+
+
+
+Make the script safe against accidental duplicate generation, or clearly stop execution if the synthetic dataset has already been generated.
+
+
+
+At the end, include SQL queries that verify:
+
+
+
+- row counts for store, staff, customer, and rental
+- no invalid rental to customer references
+- no invalid rental to staff references
+- no invalid rental to inventory references
+- no invalid customer and staff to address references
+- no return dates earlier than rental dates
+- rental date range
+- rentals per staff member
+- rental distribution across customers
+- number of NULL return dates
+
+
+
+Then explain explain which tables you have added new records too and the date range and distributions followed
+
+
+
+Then produce the complete SQL script.
+
+
+Prompt 2:Payment still contains only the original Sakila data, so its staff\_id values reference only the original two staff members.
+
+Update the generation script so related synthetic records use the newly generated data consistently
+
+Review the entire existing generation script for the same problem.
+When generated records reference related tables, use both original and newly generated records where logically appropriate rather than accidentally limiting references to only the original Sakila rows.
+Do not add unnecessary synthetic rows if existing rows can be reused.
+
+Do not modify the original sakila database constraints.
+
+Prompt 3:
+Im analyzing an SQL query, without changing anything, explain this output of my EXPLAIN ANALYZE:
+Baseline query explain analyze:
+'-> Sort: customer\_rental\_counts.rental\_count DESC  (cost=2.6..2.6 rows=0) (actual time=206..206 rows=401 loops=1)
+&#x20;   -> Filter: (customer\_rental\_counts.rental\_count > (select #3))  (cost=2.5..2.5 rows=0) (actual time=206..206 rows=401 loops=1)
+&#x20;       -> Table scan on customer\_rental\_counts  (cost=2.5..2.5 rows=0) (actual time=206..206 rows=1478 loops=1)
+&#x20;           -> Materialize CTE customer\_rental\_counts if needed  (cost=0..0 rows=0) (actual time=206..206 rows=1478 loops=1)
+&#x20;               -> Table scan on \<temporary>  (actual time=205..205 rows=1478 loops=1)
+&#x20;                   -> Aggregate using temporary table  (actual time=205..205 rows=1478 loops=1)
+&#x20;                       -> Nested loop inner join  (cost=16615 rows=160589) (actual time=0.0719..61 rows=150000 loops=1)
+&#x20;                           -> Table scan on c  (cost=152 rows=1500) (actual time=0.0509..1.22 rows=1500 loops=1)
+&#x20;                           -> Covering index lookup on r using idx\_fk\_customer\_id (customer\_id=c.customer\_id)  (cost=0.277 rows=107) (actual time=0.0138..0.0351 rows=100 loops=1500)
+&#x20;       -> Select #3 (subquery in condition; run only once)
+&#x20;           -> Aggregate: avg(customer\_rental\_counts.rental\_count)  (cost=2.5..2.5 rows=1) (actual time=0.232..0.232 rows=1 loops=1)
+&#x20;               -> Table scan on customer\_rental\_counts  (cost=2.5..2.5 rows=0) (actual time=0.0055..0.134 rows=1478 loops=1)
+&#x20;                   -> Materialize CTE customer\_rental\_counts if needed (query plan printed elsewhere)  (cost=0..0 rows=0) (never executed)
+'
+Optimized explain analyze:
+'-> Nested loop inner join  (cost=43655 rows=1370) (actual time=0.443..1.18 rows=401 loops=1)
+&#x20;   -> Sort: rc.rental\_count DESC  (cost=31297..31297 rows=1370) (actual time=0.426..0.451 rows=401 loops=1)
+&#x20;       -> Filter: (rc.rental\_count > '101.4885')  (cost=29576..29732 rows=1370) (actual time=0.0101..0.309 rows=401 loops=1)
+&#x20;           -> Table scan on rc  (cost=29575..29595 rows=1370) (actual time=0.0053..0.128 rows=1478 loops=1)
+&#x20;               -> Materialize CTE rental\_counts if needed (query plan printed elsewhere)  (cost=29575..29575 rows=1370) (never executed)
+&#x20;   -> Single-row index lookup on c using PRIMARY (customer\_id=rc.customer\_id)  (cost=0.25 rows=1) (actual time=0.00164..0.00167 rows=1 loops=401)
+'
+
+Unoptimized script:
+WITH customer\_rental\_counts AS (
+    SELECT
+        c.customer\_id,
+        c.first\_name,
+        c.last\_name,
+        COUNT(r.rental\_id) AS rental\_count
+    FROM customer AS c
+    JOIN rental AS r
+        ON c.customer\_id = r.customer\_id
+    GROUP BY
+        c.customer\_id,
+        c.first\_name,
+        c.last\_name
+)
+SELECT
+    customer\_id,
+    first\_name,
+    last\_name,
+    rental\_count
+FROM customer\_rental\_counts
+WHERE rental\_count > (
+    SELECT AVG(rental\_count)
+    FROM customer\_rental\_counts
+)
+ORDER BY rental\_count DESC;
+
+Optimized script:
+WITH rental\_counts AS (
+    SELECT
+        customer\_id,
+        COUNT(\*) AS rental\_count
+    FROM rental
+    GROUP BY customer\_id
+),
+average\_count AS (
+    SELECT AVG(rental\_count) AS avg\_rental\_count
+    FROM rental\_counts
+)
+SELECT
+    c.customer\_id,
+    c.first\_name,
+    c.last\_name,
+    rc.rental\_count
+FROM rental\_counts AS rc
+JOIN customer AS c
+    ON c.customer\_id = rc.customer\_id
+CROSS JOIN average\_count AS ac
+WHERE rc.rental\_count > ac.avg\_rental\_count
+ORDER BY rc.rental\_count DESC;
+
+Why is the estimated cost for the unoptimized query so low compared to the estimated cost for the optimized query, and despite it the actual execution time (0.213s unoptimized vs 0.03s optimized) differs significantly
